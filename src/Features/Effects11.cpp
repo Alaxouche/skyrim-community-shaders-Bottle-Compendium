@@ -69,7 +69,10 @@ Effects11::PerFrame Effects11::GetCommonBufferData()
 	data.EnableProceduralSun = enableEffect && settingManager.GetValue<bool>("EnableProceduralSun", "EFFECT");
 
 	data.EnableWater = enableEffect && settingManager.GetValue<bool>("EnableWater", "EFFECT");
-	data.WaterWavesAmplitude = settingManager.GetInterpolatedTimeOfDayValue("WavesAmplitude", "WATER");
+	// ENB's WavesAmplitude drives its own displacement/tessellation water (presets ship values like
+	// 4.0). Here it scales the vanilla normal-map amplitude and water parallax directly, so values above
+	// 1 over-steepen the normals and make reflections shimmer frame to frame. Only allow it to calm water.
+	data.WaterWavesAmplitude = std::clamp(settingManager.GetInterpolatedTimeOfDayValue("WavesAmplitude", "WATER"), 0.0f, 1.0f);
 	data.WaterMuddiness = settingManager.GetValue<float>("Muddiness", "WATER");
 	data.WaterSunLightingMultiplier = settingManager.GetValue<float>("SunLightingMultiplier", "WATER");
 	data.WaterSunSpecularMultiplier = settingManager.GetValue<float>("SunSpecularMultiplier", "WATER");

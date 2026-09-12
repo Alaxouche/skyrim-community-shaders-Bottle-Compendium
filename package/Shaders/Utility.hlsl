@@ -387,7 +387,16 @@ PS_OUTPUT main(PS_INPUT input)
 	baseTexCoord = input.TexCoord0.xy;
 #		endif
 #	endif
+#	if defined(RENDER_SHADOWMAP)
+	// Shadow maps are rasterized from the light, not from the jittered upscaled camera, so the
+	// upscaler mip bias does not apply. Sample like the vanilla shader does (vanilla Utility shaders
+	// never use sample_b): this also removes the only SharedData (b5) read from the shadow-map pass,
+	// which runs before SharedData is refreshed for the frame. Tree shadow flicker went away when
+	// this permutation fell back to vanilla, so keep the two in parity.
+	float4 baseColor = TexBaseSampler.Sample(SampBaseSampler, baseTexCoord);
+#	else
 	float4 baseColor = TexBaseSampler.SampleBias(SampBaseSampler, baseTexCoord, SharedData::MipBias);
+#	endif
 
 #	if defined(RENDER_SHADOWMAP_PB)
 	if (input.TexCoord1.z < 0) {
@@ -410,7 +419,11 @@ PS_OUTPUT main(PS_INPUT input)
 	alpha *= input.Alpha.y;
 #		endif
 #		if defined(GRAYSCALE_TO_ALPHA)
+#			if defined(RENDER_SHADOWMAP)
+	float grayScaleColor = TexGrayscaleSampler.Sample(SampGrayscaleSampler, float2(baseColor.w, alpha)).w;
+#			else
 	float grayScaleColor = TexGrayscaleSampler.SampleBias(SampGrayscaleSampler, float2(baseColor.w, alpha), SharedData::MipBias).w;
+#			endif
 	if (grayScaleColor - AlphaTestRef.x < 0) {
 		discard;
 	}

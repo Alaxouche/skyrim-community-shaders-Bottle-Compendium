@@ -1,5 +1,7 @@
 #include "ShadowmapCascadeRasterizerFix.h"
 
+#include "State.h"
+
 void ShadowmapRasterizerFix::Install()
 {
 	// This function is called once per cascade to begin the updating and rendering process
@@ -12,32 +14,56 @@ void ShadowmapRasterizerFix::Install()
 
 void ShadowmapRasterizerFix::BSShadowDirectionalLight_RenderShadowmaps_RenderCascade::thunk(RE::BSShadowDirectionalLight* light, void* arg1, void* arg2, uint32_t flags)
 {
+	// The engine only re-binds a rasterizer state when one of these dirty bits is set; swapping the
+	// pointer table alone leaves whatever D3D object was last bound on the context.
+	constexpr auto rasterDirtyFlags = static_cast<uint32_t>(RE::BSGraphics::ShaderFlags::DIRTY_RASTER_CULL_MODE) |
+	                                  static_cast<uint32_t>(RE::BSGraphics::ShaderFlags::DIRTY_RASTER_DEPTH_BIAS);
+	auto markRasterStateDirty = [] {
+		if (auto* dirtyFlags = globals::game::stateUpdateFlags)
+			dirtyFlags->set(static_cast<RE::BSGraphics::ShaderFlags>(rasterDirtyFlags));
+	};
+
+	static bool backupTaken = false;
+	static bool cascadeCloned[maxCascades] = {};
+	static uint32_t lastFrame = UINT32_MAX;
+	static const RE::BSShadowDirectionalLight* lastLight = nullptr;
 	static uint cascade = 0;
 
-	static bool initialized = false;
-	if (!initialized) {
-		//Backup
-		if (cascade == 0) {
-			std::memcpy(backupGameRasterStates, *gRasterStates, sizeof(RasterStateArray));
-			numCascades = std::min(numCascades, maxCascades);
-		}
+	// Derive the cascade index from the call order within the current frame instead of a counter that
+	// wraps forever: if the engine renders a different number of cascades than iNumSplits reported at
+	// install time, a free-running counter drifts and the per-cascade states end up on the wrong split.
+	const uint32_t frame = globals::state ? globals::state->frameCount : 0;
+	if (frame != lastFrame || light != lastLight) {
+		lastFrame = frame;
+		lastLight = light;
+		cascade = 0;
+	}
+	const uint cascadeIndex = std::min(cascade, maxCascades - 1);
+	++cascade;
 
-		//Clone
-		CloneRasterStates(gRasterStates, cascade);
-
-		initialized = cascade == numCascades - 1;
+	if (!backupTaken) {
+		std::memcpy(backupGameRasterStates, *gRasterStates, sizeof(RasterStateArray));
+		backupTaken = true;
 	}
 
-	//Emplace
-	std::memcpy(*gRasterStates, shadowmapRasterStates[cascade], sizeof(RasterStateArray));
+	if (!cascadeCloned[cascadeIndex]) {
+		CloneRasterStates(&backupGameRasterStates, cascadeIndex);
+		cascadeCloned[cascadeIndex] = true;
+	}
+
+	// Emplace the biased states for this cascade and force the first shadow draw to bind them.
+	std::memcpy(*gRasterStates, shadowmapRasterStates[cascadeIndex], sizeof(RasterStateArray));
+	markRasterStateDirty();
 
 	func(light, arg1, arg2, flags);
 
-	//Restore
-	if (cascade == numCascades - 1)
-		std::memcpy(*gRasterStates, backupGameRasterStates, sizeof(RasterStateArray));
-
-	cascade = ++cascade < numCascades ? cascade : 0;
+	// Restore after every cascade and force a re-bind. Without the dirty bits the last biased state
+	// (depth bias plus slope-scaled bias, applied to all 12 depth-bias modes) stayed bound into the
+	// depth prepass whenever its first draw shared cull/bias indices with the last shadow draw. That
+	// depends on draw order, so on random frames grazing surfaces such as terrain wrote pushed-back
+	// depth, the shadow mask reconstructed wrong positions, and directional shadows vanished for a frame.
+	std::memcpy(*gRasterStates, backupGameRasterStates, sizeof(RasterStateArray));
+	markRasterStateDirty();
 }
 
 void ShadowmapRasterizerFix::GetUpdatedRasterDesc(D3D11_RASTERIZER_DESC& outputDesc, ShadowMapRasterizerDescriptor shadowmapDesc)

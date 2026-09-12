@@ -574,6 +574,7 @@ void DynamicCubemaps::UpdateCubemap()
 
 	switch (nextTask) {
 	case NextTask::kCaptureInferAndIrradianceA:
+		LatchReflectionMode();
 		UpdateCubemapCapture(false);
 		Inferrence(false);
 		Irradiance(false, 1, kIrradianceSplit, /*doSetup=*/true);
@@ -828,16 +829,31 @@ void DynamicCubemaps::SetupResources()
 
 void DynamicCubemaps::Reset()
 {
-	activeReflections = globals::state->activeReflections;
+	// Only remember that reflections were rendered this frame; the mode itself is latched at the
+	// start of the next capture cycle so it stays constant for the whole multi-frame pipeline.
+	if (globals::state->activeReflections)
+		reflectionsSeen = true;
+}
 
-	if (globals::game::sky)
-		fakeReflections = activeReflections && globals::game::sky->flags.any(RE::Sky::Flags::kHideSky);
-	else
-		fakeReflections = false;
+void DynamicCubemaps::LatchReflectionMode()
+{
+	bool active = reflectionsSeen;
+	bool fake = false;
 
-	if (!activeReflections && !Util::IsInterior()) {
-		activeReflections = true;
-		fakeReflections = true;
+	if (active) {
+		if (auto sky = globals::game::sky)
+			fake = sky->flags.any(RE::Sky::Flags::kHideSky);
+	} else if (!Util::IsInterior()) {
+		active = true;
+		fake = true;
 	}
+
+	// The reflections capture accumulates over time; mixing fake and real content would smear.
+	if (fake != fakeReflections)
+		resetCapture[1] = true;
+
+	activeReflections = active;
+	fakeReflections = fake;
+	reflectionsSeen = false;
 }
 #undef I18N_KEY_PREFIX

@@ -84,8 +84,13 @@ public:
 
 	ID3D11ShaderResourceView* defaultCubemap = nullptr;
 
+	// Reflection mode used by the capture pipeline and by PostDeferred. Latched once per capture
+	// cycle (see LatchReflectionMode) so it cannot change while a cycle is in flight.
 	bool activeReflections = false;
 	bool fakeReflections = false;
+	// Sticky: set by Reset() whenever water reflections were rendered during a frame of the
+	// current cycle, consumed by LatchReflectionMode().
+	bool reflectionsSeen = false;
 
 	bool resetCapture[2] = { true, true };
 	bool recompileFlag = false;
@@ -139,6 +144,15 @@ public:
 
 	Settings settings;
 	void UpdateCubemap();
+
+	/**
+	 * @brief Latches the reflection mode for the capture cycle that is about to start.
+	 *
+	 * Water reflections are not rendered on every frame, so deriving the mode per frame made
+	 * PostDeferred alternate between the reflections and base cubemaps and flipped the capture
+	 * shader between real and fake reflections mid-cycle, which showed as cubemap flicker.
+	 */
+	void LatchReflectionMode();
 
 	void PostDeferred();
 
